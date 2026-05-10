@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Maks' Journey</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      background: #0a0f05;
+      height: 100%;
+      overflow: hidden;
+      -webkit-tap-highlight-color: transparent;
+    }
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    #game-container canvas { image-rendering: pixelated; }
+
+    /* ── Portrait-rotation prompt (mobile only, in portrait) ─────────── */
+    #rotate-prompt {
+      display: none;
+      position: fixed; inset: 0;
+      background: #0a0f05;
+      z-index: 9999;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: monospace;
+      text-align: center;
+      padding: 20px;
+    }
+    body.mobile.portrait #rotate-prompt { display: flex; }
+    #rotate-prompt .icon {
+      font-size: 80px; color: #FFD700;
+      animation: rotateHint 2.4s ease-in-out infinite;
+    }
+    @keyframes rotateHint {
+      0%, 40%   { transform: rotate(0deg); }
+      55%, 100% { transform: rotate(90deg); }
+    }
+    #rotate-prompt .title { font-size: 22px; color: #FFD700; margin-top: 32px; font-weight: bold; }
+    #rotate-prompt .sub   { font-size: 13px; color: #aaffaa; margin-top: 12px; max-width: 320px; line-height: 1.45; }
+
+    /* ── On-screen touch controls (mobile, landscape only) ───────────── */
+    #touch-controls {
+      display: none;
+      position: fixed; inset: 0;
+      pointer-events: none;
+      z-index: 100;
+    }
+    body.mobile.landscape #touch-controls { display: block; }
+
+    .tc-btn {
+      position: absolute;
+      pointer-events: auto;
+      width: 60px; height: 60px;
+      border-radius: 50%;
+      border: 3px solid rgba(255, 215, 0, 0.7);
+      background: rgba(10, 20, 10, 0.55);
+      color: #FFD700;
+      font-family: monospace;
+      font-size: 22px;
+      font-weight: bold;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: none;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+    }
+    .tc-btn.active {
+      background: rgba(255, 215, 0, 0.45);
+      border-color: #fff;
+      transform: scale(0.92);
+    }
+
+    /* D-pad cluster (bottom-left) */
+    .tc-up    { left:  78px; bottom: 156px; }
+    .tc-down  { left:  78px; bottom:  20px; }
+    .tc-left  { left:  14px; bottom:  88px; }
+    .tc-right { left: 142px; bottom:  88px; }
+
+    /* Action buttons (bottom-right) */
+    .tc-attack    { right:  90px; bottom:  20px; background: rgba(60, 10, 10, 0.6); }   /* Z */
+    .tc-jump      { right:  18px; bottom:  90px; background: rgba(10, 30, 60, 0.6); }   /* X */
+    .tc-boomerang { right:  90px; bottom: 110px; background: rgba(40, 30, 10, 0.6); }   /* S */
+    .tc-attack span, .tc-jump span, .tc-boomerang span {
+      font-size: 9px; color: #ddd; position: absolute; bottom: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div id="game-container"></div>
+
+  <!-- Portrait rotate prompt -->
+  <div id="rotate-prompt">
+    <div class="icon">📱</div>
+    <div class="title">PLEASE ROTATE</div>
+    <div class="sub">Maks' Journey is best played in landscape. Turn your device sideways to begin.</div>
+  </div>
+
+  <!-- Touch controls -->
+  <div id="touch-controls">
+    <div class="tc-btn tc-up"        data-key="up">▲</div>
+    <div class="tc-btn tc-down"      data-key="down">▼</div>
+    <div class="tc-btn tc-left"      data-key="left">◀</div>
+    <div class="tc-btn tc-right"     data-key="right">▶</div>
+    <div class="tc-btn tc-attack"    data-key="z">Z<span>Attack</span></div>
+    <div class="tc-btn tc-jump"      data-key="x">X<span>Jump</span></div>
+    <div class="tc-btn tc-boomerang" data-key="s">S<span>Toss</span></div>
+  </div>
+
+  <script>
+    // ── Mobile + orientation detection ─────────────────────────────────────
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+                  || (navigator.maxTouchPoints > 0 && Math.min(window.innerWidth, window.innerHeight) < 800);
+
+    function updateLayout() {
+      const portrait = window.innerHeight > window.innerWidth;
+      document.body.classList.toggle('mobile',    isMobile);
+      document.body.classList.toggle('portrait',  portrait);
+      document.body.classList.toggle('landscape', !portrait);
+    }
+    updateLayout();
+    window.addEventListener('resize', updateLayout);
+    window.addEventListener('orientationchange', updateLayout);
+
+    // ── Virtual-key bridge — game.js reads from window.__VKEYS__ ──────────
+    // `*Edge` flags are consumed on the next frame (single-press semantics).
+    window.__VKEYS__ = {
+      left:false, right:false, up:false, down:false,
+      z:false, x:false, s:false,
+      zEdge:false, xEdge:false, sEdge:false,
+      tap:false,  // any-tap edge for cutscene/victory/game-over advance
+    };
+
+    function bindButton(btn) {
+      const key = btn.dataset.key;
+      const press = (e) => {
+        e.preventDefault();
+        btn.classList.add('active');
+        const vk = window.__VKEYS__;
+        switch (key) {
+          case 'left':  vk.left  = true; break;
+          case 'right': vk.right = true; break;
+          case 'up':    vk.up    = true; break;
+          case 'down':  vk.down  = true; break;
+          case 'z':     vk.z = true; vk.zEdge = true; vk.tap = true; break;
+          case 'x':     vk.x = true; vk.xEdge = true; vk.tap = true; break;
+          case 's':     vk.s = true; vk.sEdge = true; vk.tap = true; break;
+        }
+      };
+      const release = (e) => {
+        e.preventDefault();
+        btn.classList.remove('active');
+        const vk = window.__VKEYS__;
+        switch (key) {
+          case 'left':  vk.left  = false; break;
+          case 'right': vk.right = false; break;
+          case 'up':    vk.up    = false; break;
+          case 'down':  vk.down  = false; break;
+          case 'z':     vk.z = false; break;
+          case 'x':     vk.x = false; break;
+          case 's':     vk.s = false; break;
+        }
+      };
+      btn.addEventListener('touchstart',  press,   { passive: false });
+      btn.addEventListener('touchend',    release, { passive: false });
+      btn.addEventListener('touchcancel', release, { passive: false });
+      // Desktop testing
+      btn.addEventListener('mousedown',   press);
+      btn.addEventListener('mouseup',     release);
+      btn.addEventListener('mouseleave',  release);
+    }
+    document.querySelectorAll('.tc-btn').forEach(bindButton);
+
+    // Any-tap on the game canvas advances cutscene / restart screens on mobile.
+    document.getElementById('game-container').addEventListener('touchstart', () => {
+      window.__VKEYS__.tap = true;
+    }, { passive: true });
+  </script>
+
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+  <script src="js/game.js"></script>
+</body>
+</html>
