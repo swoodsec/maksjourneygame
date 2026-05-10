@@ -102,6 +102,7 @@ class PreloadScene extends Phaser.Scene {
     this.load.image('door',      'assets/sprites/door.png');
     this.load.image('door-open', 'assets/sprites/door-open.png');
     this.load.image('logpile',   'assets/sprites/logpile.png');
+    this.load.image('borscht',   'assets/sprites/borscht.png');
     this.load.image('machinegun','assets/sprites/machinegun.png');
     this.load.image('web-blob', 'assets/sprites/web-blob.png');
     this.load.image('sausage-bullet', 'assets/sprites/sausage-bullet.png');
@@ -465,6 +466,34 @@ class PreloadScene extends Phaser.Scene {
       g.fillRect(10, 21, 9, 3);
       g.fillRect(10, 26, 7, 3);
       g.generateTexture('key', 32, 32);
+    }
+
+    // Borscht bowl (healing item) — procedural placeholder
+    if (!t.exists('borscht')) {
+      g.clear();
+      // Wooden bowl
+      g.fillStyle(0x6B3E1A);
+      g.fillEllipse(16, 22, 26, 10);
+      g.fillStyle(0x4A2810);
+      g.fillEllipse(16, 24, 26, 8);
+      // Borscht surface
+      g.fillStyle(0xA01818);
+      g.fillEllipse(16, 19, 22, 6);
+      g.fillStyle(0xC02828);
+      g.fillEllipse(16, 18, 18, 4);
+      // Sour cream dollop
+      g.fillStyle(0xFFFFFF);
+      g.fillCircle(16, 17, 3);
+      // Dill (green flecks)
+      g.fillStyle(0x44AA22);
+      g.fillCircle(12, 18, 1);
+      g.fillCircle(20, 18, 1);
+      // Steam wisps
+      g.fillStyle(0xCCDDDD, 0.55);
+      g.fillCircle(13, 12, 2);
+      g.fillCircle(18, 9, 2);
+      g.fillCircle(15, 6, 1.5);
+      g.generateTexture('borscht', 32, 32);
     }
 
     // Tree-door
@@ -889,9 +918,10 @@ class GameScene extends Phaser.Scene {
     this.score        = 0;
     this.victoryDone  = false;
     this.gameOverDone = false;
-    this.projectiles  = [];
-    this.gunItems     = [];
-    this.boss         = null;
+    this.projectiles   = [];
+    this.gunItems      = [];
+    this.borschtItems  = [];
+    this.boss          = null;
     this.bossHealthBar = null;
 
     this._buildWorld(totalW);
@@ -1095,11 +1125,16 @@ class GameScene extends Phaser.Scene {
 
       // Enemies: 5-10 per area
       const count = 5 + Math.floor(Math.random() * 6);
+      // Pick one random non-last enemy in this area to drop a borscht bowl on death.
+      // (Last enemy is the key holder so we choose someone else for variety.)
+      const borschtIdx = (count > 1) ? Math.floor(Math.random() * (count - 1)) : 0;
       for (let i = 0; i < count; i++) {
         const ex = ax + 500 + Math.random() * (CFG.AREA_W - 650);
         const ey = CFG.GROUND_TOP + 30 + Math.random() * (CFG.GROUND_BOT - CFG.GROUND_TOP - 50);
         const isLast = (i === count - 1);
-        this.enemies.push(new Enemy(this, ex, ey, a, isLast));
+        const enemy = new Enemy(this, ex, ey, a, isLast);
+        enemy.dropsBorscht = (i === borschtIdx);
+        this.enemies.push(enemy);
       }
 
       // Door between areas (not after boss area)
@@ -1164,6 +1199,7 @@ class GameScene extends Phaser.Scene {
     this._checkBoomerangCollisions();
     this._checkGunPickup();
     this._checkKeyPickup();
+    this._checkBorschtPickup();
     this._checkDoorOpen();
     this._checkVictory();
     this._sortDepth();
@@ -1235,6 +1271,28 @@ class GameScene extends Phaser.Scene {
         this.keysHeld++;
         this.score += 500;
         this._floatText(k.worldX, k.groundY - 30, '🔑 KEY!', 0xFFD700);
+      }
+    }
+  }
+
+  _checkBorschtPickup() {
+    const p = this.player;
+    if (p.state === 'dead') return;
+    for (const b of this.borschtItems) {
+      if (b.collected) continue;
+      const dx = Math.abs(p.worldX - b.worldX);
+      const dy = Math.abs(p.groundY - b.groundY);
+      if (dx < 40 && dy < 44) {
+        const heal = 10 + Math.floor(Math.random() * 16);  // 10–25
+        p.hp = Math.min(p.maxHp, p.hp + heal);
+        b.collect();
+        this._floatText(b.worldX, b.groundY - 40, `+${heal} HP 🥣`, 0x66FF99);
+        // Brief green flash on Maks
+        this.tweens.add({
+          targets: p.sprite, tint: 0x88FFAA, duration: 100, yoyo: true, repeat: 1,
+          onStart: () => p.sprite.setTint(0x88FFAA),
+          onComplete: () => p.sprite.clearTint(),
+        });
       }
     }
   }
@@ -1439,6 +1497,11 @@ class GameScene extends Phaser.Scene {
   spawnKey(x, y, area) {
     const k = new KeyItem(this, x, y - 28, area);
     this.keyItems.push(k);
+  }
+
+  spawnBorscht(x, y) {
+    if (!this.borschtItems) this.borschtItems = [];
+    this.borschtItems.push(new BorschtItem(this, x, y - 24));
   }
 
   _floatText(x, y, text, color) {
@@ -2024,6 +2087,7 @@ class Enemy {
 
       this.scene.time.delayedCall(500, () => {
         if (this.isKeyHolder) this.scene.spawnKey(this.worldX, this.groundY, this.area);
+        if (this.dropsBorscht) this.scene.spawnBorscht(this.worldX, this.groundY);
         this.scene.tweens.add({
           targets: [this.sprite, this.shadow, this.hpBg, this.hpFill],
           alpha: 0, duration: 600,
@@ -2514,6 +2578,40 @@ class KeyItem {
     this.scene.tweens.add({
       targets: this.sprite, y: this.groundY - 60, alpha: 0, scaleX: 2.5, scaleY: 2.5,
       duration: 380, onComplete: () => this.sprite.destroy()
+    });
+  }
+}
+
+// =============================================================================
+// BORSCHT (healing item — drops from a random enemy in each area)
+// =============================================================================
+class BorschtItem {
+  constructor(scene, x, y) {
+    this.scene     = scene;
+    this.worldX    = x;
+    this.groundY   = y;
+    this.collected = false;
+
+    this.sprite = scene.add.image(x, y, 'borscht').setDepth(8).setScale(1.6);
+    // Soft red aura to draw the eye
+    this.aura = scene.add.circle(x, y, 18, 0xff5544, 0.18).setDepth(7.9);
+    scene.tweens.add({ targets: this.sprite, y: y - 8, duration: 750, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    scene.tweens.add({ targets: this.aura,   y: y - 8, duration: 750, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    scene.tweens.add({ targets: this.aura, scale: 1.3, alpha: 0.28, duration: 600, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+  }
+
+  collect() {
+    if (this.collected) return;
+    this.collected = true;
+    this.scene.tweens.killTweensOf(this.sprite);
+    this.scene.tweens.killTweensOf(this.aura);
+    this.scene.tweens.add({
+      targets: this.sprite, y: this.groundY - 60, alpha: 0, scaleX: 2.5, scaleY: 2.5,
+      duration: 380, onComplete: () => this.sprite.destroy(),
+    });
+    this.scene.tweens.add({
+      targets: this.aura, alpha: 0, scale: 2.4, duration: 380,
+      onComplete: () => this.aura.destroy(),
     });
   }
 }
