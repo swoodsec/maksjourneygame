@@ -2287,7 +2287,10 @@ class BossSpider {
         if (this.stateTimer <= 0 && this.websShot < this.maxWebs) {
           this._fireWeb(player);
           this.websShot++;
-          this.stateTimer = enraged ? 0.22 : 0.32;  // tight rhythm — must keep jumping
+          // Random gap between shots so the player can't memorize a single jump rhythm.
+          // Base spacing is long enough to land between jumps (jump airtime ~0.72s).
+          const base = enraged ? 0.55 : 0.75;
+          this.stateTimer = base + Math.random() * 0.35;  // [base, base+0.35]
         }
         if (this.websShot >= this.maxWebs && this.stateTimer <= 0) {
           // After volley, occasionally web-shield (less often than before)
@@ -2331,15 +2334,24 @@ class BossSpider {
   }
 
   _fireWeb(player) {
-    // Spawn from spider's mouth/body and aim toward player's chest level.
+    // Spawn from spider's mouth/body and aim toward the player with randomization
+    // so volleys aren't all clustered on one trajectory.
     const startX  = this.worldX + this.facing * 60;
-    const startY  = this.bodyCenterY() + 10;  // just below body center, near abdomen
-    const targetX = player.worldX;
-    const targetY = player.groundY - 38;       // player's chest height (must jump to dodge)
-    const ddx = targetX - startX, ddy = targetY - startY;
-    const dd  = Math.hypot(ddx, ddy) || 1;
-    const vx  = (ddx / dd) * CFG.WEB_SPEED;
-    const vy  = (ddy / dd) * CFG.WEB_SPEED;
+    const startY  = this.bodyCenterY() + 10;
+    // Aim Y varies ±18px around chest height — some skim low (must jump high), others
+    // ride higher (must jump early). Forces the player to read each web individually.
+    const aimY    = player.groundY - 30 - (Math.random() * 30);  // [-30, -60] above feet
+    // Lead the player slightly when they're moving — makes shots feel intelligent.
+    const leadX   = player.worldX + (player.knockVelX || 0) * 0.15;
+    const ddx = leadX - startX, ddy = aimY - startY;
+    const baseAngle = Math.atan2(ddy, ddx);
+    // Per-shot angle jitter: ±0.18 rad (~10°). Combined with timing variance this
+    // means consecutive webs can't be cleared by a single timed jump.
+    const angle = baseAngle + (Math.random() - 0.5) * 0.36;
+    // Slight speed variance too.
+    const speed = CFG.WEB_SPEED * (0.85 + Math.random() * 0.3);
+    const vx = Math.cos(angle) * speed;
+    const vy = Math.sin(angle) * speed;
     const proj = new Projectile(this.scene, startX, startY, vx, vy, 'enemy', 'web-blob');
     this.scene.projectiles.push(proj);
     this.scene.cameras.main.shake(60, 0.004);
